@@ -1,6 +1,6 @@
 /* ESP32 Weather Display using an EPD 4.2" Display, obtains data from Open Weather Map, decodes it and then displays it.
   ####################################################################################################################################
-  This software, the ideas and concepts is Copyright (c) David Bird 2018. All rights to this software are reserved.
+  This software, the ideas and concepts is Copyright (c) David Bird 2018, Inoki 2021. All rights to this software are reserved.
 
   Any redistribution or reproduction of any part or all of the contents in any form is prohibited other than the following:
   1. You may print or download to a local hard disk extracts for your personal and non-commercial use only.
@@ -19,7 +19,7 @@
 */
 #include "owm_credentials.h"  // See 'owm_credentials' tab and enter your OWM API key and set the Wifi SSID and PASSWORD
 #include <ArduinoJson.h>       // https://github.com/bblanchon/ArduinoJson
-#include <WiFi.h>              // Built-in
+#include <ESP8266WiFi.h>       // Built-in
 #include "time.h"              // Built-in
 #include <SPI.h>               // Built-in
 #define  ENABLE_GxEPD2_display 0
@@ -89,7 +89,7 @@ long    StartTime = 0;
 Forecast_record_type  WxConditions[1];
 Forecast_record_type  WxForecast[max_readings];
 
-#include <common.h>
+#include "common.h"
 
 #define autoscale_on  true
 #define autoscale_off false
@@ -137,7 +137,6 @@ void loop() { // this will never run!
 void BeginSleep() {
   display.powerOff();
   long SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec)); //Some ESP32 are too fast to maintain accurate time
-  esp_sleep_enable_timer_wakeup((SleepTimer+20) * 1000000LL); // Added +20 seconnds to cover ESP32 RTC timer source inaccuracies
 #ifdef BUILTIN_LED
   pinMode(BUILTIN_LED, INPUT); // If it's On, turn it off and some boards use GPIO-5 for SPI-SS, which remains low after screen use
   digitalWrite(BUILTIN_LED, HIGH);
@@ -145,7 +144,7 @@ void BeginSleep() {
   Serial.println("Entering " + String(SleepTimer) + "-secs of sleep time");
   Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
   Serial.println("Starting deep-sleep period...");
-  esp_deep_sleep_start();      // Sleep for e.g. 30 minutes
+  ESP.deepSleep((SleepTimer+20) * 1000000LL); // Added +20 seconnds to cover ESP8266 RTC timer source inaccuracies      // Sleep for e.g. 30 minutes
 }
 //#########################################################################################
 void DisplayWeather() {                 // 4.2" e-paper display is 400x300 resolution
@@ -464,10 +463,12 @@ boolean SetupTime() {
 boolean UpdateLocalTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
+  /*
   while (!getLocalTime(&timeinfo, 10000)) { // Wait for 5-sec for time to synchronise
     Serial.println("Failed to obtain time");
     return false;
   }
+  */
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
   CurrentSec  = timeinfo.tm_sec;
@@ -893,7 +894,8 @@ void InitialiseDisplay() {
   display.init(115200, true, 2, false);
   // display.init(); for older Waveshare HAT's
   SPI.end();
-  SPI.begin(EPD_SCK, EPD_MISO, EPD_MOSI, EPD_CS);
+  // TODO: fixme or clarify wherer are the SPI PINs
+  SPI.begin();
   u8g2Fonts.begin(display); // connect u8g2 procedures to Adafruit GFX
   u8g2Fonts.setFontMode(1);                  // use u8g2 transparent mode (this is default)
   u8g2Fonts.setFontDirection(0);             // left to right (this is default)
