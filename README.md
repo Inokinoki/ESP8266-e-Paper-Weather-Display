@@ -1,80 +1,150 @@
-# ESP32-e-Paper-Weather-Display
-An ESP32 and an ePaper Display reads [Open Weather Map](https://openweathermap.org/) and displays the weather
+# ESP8266 / ESP32 e-Paper Weather Display
 
-For standalone use, download the ZIP file to your desktop.
+ESP8266 / ESP32 电子墨水屏天气站，从 [OpenWeatherMap](https://openweathermap.org/) 拉取当前天气和预报并显示。
 
-Go to Sketch > Include Library... > Add .ZIP Library... Then, choose the ZIP file.
+本仓库是 [G6EJD/ESP32-e-Paper-Weather-Display](https://github.com/G6EJD/ESP32-e-Paper-Weather-Display) 的 fork，目标是让 **4.2" 屏在 ESP8266 上可用**，同时保留 ESP32 示例。
 
-After inclusion, Go to File, Examples and scroll down to 'ESP32-e-paperWeather-display' and choose your version/screen size. Make sure to come back to this dialog from time to time to keep each library up to date. Also make sure that you only have one version of each of the libraries installed.
+An ESP8266 or ESP32 plus an e-paper panel that reads OpenWeatherMap and displays the weather.
 
-Also see: https://www.arduino.cc/en/Guide/Libraries#toc4
+---
 
-- [Mini Grafx](https://github.com/ThingPulse/minigrafx) by Daniel Eichhorn
-- [Arduino JSON](https://github.com/bblanchon/ArduinoJson) (v6 or above) by Benoît Blanchon
+## 平台支持 / Platform support
 
-Download the software to your Arduino's library directory.
+| 示例 | 推荐 MCU | 说明 |
+| --- | --- | --- |
+| `Waveshare_4_2` | **ESP8266 或 ESP32** | 本 fork 的主示例。ESP8266 默认按 Wemos D1 mini / NodeMCU 接线 |
+| `Waveshare_1_54` / `2.9` / `2.7` / `2.13_T5` | ESP32 | 未改成 ESP8266 |
+| `Waveshare_7_5` / `7_5_T7` / `9_7` | ESP32 | 帧缓冲太大，ESP8266 内存不够 |
+| `M5_CoreInk` | ESP32 | M5 专用 |
 
-1. From the examples, choose depending on your module either
-   - Waveshare_1_54
-   - Waveshare_2_13
-   - Waveshare_2_7
-   - Waveshare_2_9
-   - Waveshare_4_2
-   - Waveshare_7_5 
-(instead of Mini Grafx requires [GxEPD2 library](https://github.com/ZinggJM/GxEPD2), which needs [Adafruit_GFX](https://github.com/adafruit/Adafruit-GFX-Library), additionally requires U8g2_for_Adafruit_GFX)
-   - Waveshare_7_5_T7 (the newer 800x480 version; above is 640x384)
+---
 
-2. Obtain your [OWM API key](https://openweathermap.org/appid) - it's free
+## 重要变化 / Breaking changes
 
-3. Edit the owm_credentials.h file in the IDE (TAB at top of IDE) and change your Language, Country, choose your units Metric or Imperial and be sure to find a valid weather station location on OpenWeatherMap, if your display has all blank values your location does not exist!
+1. **必须使用经纬度**  
+   OpenWeatherMap 已弃用城市名查询。请在 `owm_credentials.h` 中填写 `LAT` 和 `LON`（城市名仅用于屏幕标题）。  
+   Current Weather 2.5 与 5-day / 3-hour Forecast 2.5 仍可走免费额度。One Call 3.0 需要付费订阅，本项目不使用。
 
-4. If your are using the older style Waveshare HAT then you need to use:
-  
-  **display.init();**//for older Waveshare HAT's 
-  
-  In the InitialiseDisplay() function, comment out as required 
+2. **ESP8266 4.2" 引脚**  
+   ESP8266 没有 GPIO 17/18/19/23。4.2" 示例默认改为：
 
-5. Save your files.
+   | 墨水屏 | Wemos D1 mini |
+   | --- | --- |
+   | BUSY | D2 (GPIO4) |
+   | RST | D4 (GPIO2) |
+   | DC | D3 (GPIO0) |
+   | CS | D8 (GPIO15) |
+   | CLK | D5 (GPIO14) |
+   | DIN | D7 (GPIO13) |
+   | GND | GND |
+   | 3.3V | **3.3V（不要接 5V）** |
 
-NOTE: See schematic for the wiring diagram, all displays are wired the same, so wire a 7.5" the same as a 4.2", 2.9" or 1.54" display! Both 2.13" TTGO T5 and 2.7" T5S boards come pre-wired.
+   Waveshare ESP8266 Driver Board 可用：BUSY=16, RST=5, DC=4, CS=15, CLK=14, DIN=13。
 
-The Battery monitor assumes the use of a Lolin D32 board which uses GPIO-35 as an ADC input, also it has an on-board 100K+100K voltage divider directly connected to the Battery terminals. On other boards, you will need to change the analogRead(35) statement to your board e.g. (39) and attach a voltage divider to the battery terminals. The TTGO T5 and T5S boards already contain the resistor divider on the correct pin.
+---
 
-Compile and upload the code - Enjoy!
+## 安装 / Setup
 
-7.5" 800x480 E-Paper Layout
+1. 用 Arduino IDE：Sketch → Include Library → Add .ZIP Library，加入本仓库。
+2. 依赖库：
+   - [GxEPD2](https://github.com/ZinggJM/GxEPD2)（需要 [Adafruit_GFX](https://github.com/adafruit/Adafruit-GFX-Library)）
+   - [U8g2_for_Adafruit_GFX](https://github.com/olikraus/U8g2_for_Adafruit_GFX)
+   - [ArduinoJson](https://github.com/bblanchon/ArduinoJson) v6 或 v7
+3. File → Examples → `ESP8266-e-Paper-Weather-Display` → 选择你的屏幕尺寸。
+4. 申请免费 [OWM API key](https://openweathermap.org/appid)。
+5. 编辑示例里的 `owm_credentials.h`：WiFi、API key、**LAT/LON**、语言、公制/英制、时区。
+6. 编译上传。
 
-![alt text width="600"](/Waveshare_7_5_new.jpg)
+经纬度可在 [OpenStreetMap](https://www.openstreetmap.org/) 或 [latlong.net](https://www.latlong.net/) 查询。如果屏幕上全是空白数值，通常是坐标或 API key 无效。
 
-7.5" 640x384 E-Paper Layout
+旧版 Waveshare HAT 请在 `InitialiseDisplay()` 里改用 `display.init();`。
 
-![alt text width="600"](/Waveshare_7_5.jpg)
+---
 
-4.2" 400x300 E-Paper Layout
+## ESP8266 注意 / ESP8266 notes
 
-![alt_text, width="400"](/Waveshare_4_2.jpg)
+- **内存**：`common.h` 对 ESP8266 使用过滤后的 JSON 和 12KB 文档。4.2" 全屏缓冲是 15KB，ESP8266 默认改用 **分页绘制**（见下节）。
+- **时间**：ESP8266 没有 `getLocalTime()`。4.2" 示例用 NTP + `localtime_r()`。
+- **电池**：ESP8266 默认不画电池。若 A0 接了分压，在编译时定义 `HAS_BATTERY_MONITOR`。
+- **深度睡眠**：4.2" 示例调用 `ESP.deepSleep()`；GPIO16 需接到 RST 才能自动唤醒。
+- **调试输出**：在包含 `common.h` 之前 `#define WX_DEBUG 0` 可关掉天气字段打印，节省时间和电量。
 
-2.7" 264x176 E-Paper Layout
+---
 
-![alt_text, width="400"](/Waveshare_2_7.jpg)
+## 分页更新（小缓冲）/ Paged updates when RAM is tight
 
-2.13" 250x122 E-Paper Layout
+4.2" 单色全屏位图是 `400×300/8 = 15000` 字节。ESP8266 在 WiFi + JSON 之后往往放不下整帧，因此 `Waveshare_4_2` 使用 GxEPD2 的 `firstPage()` / `nextPage()`：**只保留一条水平带的缓冲，整幅画面分多遍重绘**，库会裁剪到当前页。
 
-![alt_text, width="200"](/Waveshare_2_13.jpg)
+| MCU | 默认页高 | 缓冲 | 遍数 |
+| --- | --- | --- | --- |
+| ESP8266 | 75px (`HEIGHT/4`) | 3750 B | 4 |
+| ESP32 | 300px（整帧） | 15000 B | 1 |
 
-1.54" 200x200 E-Paper Layout
+仍不够就在构造 `display` 之前把页高改小（须能整除 300）：
 
-![alt_text, width="200"](/Waveshare_1_54.jpg)
+```cpp
+#define EPD_PAGE_HEIGHT 50   // 2500 字节，6 遍
+// #define EPD_PAGE_HEIGHT 20  // 1000 字节，15 遍
+```
 
-**** NOTE change needed for latest Waveshare HAT versions ****
+`USE_PARTIAL_UPDATE` 只影响波形（快刷 LUT vs 全刷清残影），和分页缓冲不是一回事。深度睡眠时请保持面板 3.3V。
 
-Ensure you have the latest GxEPD2 library
+```cpp
+#define USE_PARTIAL_UPDATE 1
+#define FULL_REFRESH_EVERY 8
+#define CLOCK_PARTIAL_MINUTES 0  // 1 = 两次天气之间只分页刷新顶栏时间
+```
 
-See here: https://github.com/ZinggJM/GxEPD2/releases/tag/1.2.10
+---
 
-Modify this line in the code:
+## 语言 / Languages
 
-display.init(115200, true, 2); // init(uint32_t serial_diag_bitrate, bool initial, uint16_t reset_duration, bool pulldown_rst_mode)
+在 sketch 里改 `#include "lang.h"` 为其它文件：`lang_cz.h`、`lang_es.h`、`lang_fr.h`、`lang_gr.h`、`lang_it.h`、`lang_nl.h`、`lang_no.h`、`lang_pl.h`、`lang_pt.h`、**`lang_zh.h`（简体中文）**。
 
-Wiring Schematic for ALL Waveshare E-Paper Displays
-![alt_text, width="300"](/Schematic.JPG)
+Helvetica 字库不含汉字。要用 `lang_zh.h`，请把 u8g2 字体换成例如 `u8g2_font_wqy12_t_gb2312`。OWM 的 `Language = "ZH_CN"` 只影响接口返回的天气描述。
+
+带音标的语言可把 `u8g2_font_helvB08_tf` 换成 `u8g2_font_helvB08_te`（`tf` → `te`）。
+
+---
+
+## 接线总图 / Wiring
+
+所有 Waveshare 墨水屏的信号线定义相同（7.5" 与 4.2" / 2.9" / 1.54" 一样）。TTGO T5 / T5S 已板载连好。
+
+![Wiring schematic](/Schematic.JPG)
+
+ESP32 电池监测默认按 Lolin D32（GPIO35，板载 100K+100K 分压）。其它板请改 `analogRead` 引脚并自行加分压。TTGO T5 / T5S 已有分压。
+
+---
+
+## 屏幕预览 / Layouts
+
+7.5" 800x480
+
+![7.5 new](/Waveshare_7_5_new.jpg)
+
+7.5" 640x384
+
+![7.5](/Waveshare_7_5.jpg)
+
+4.2" 400x300
+
+![4.2](/Waveshare_4_2.jpg)
+
+2.7" 264x176
+
+![2.7](/Waveshare_2_7.jpg)
+
+2.13" 250x122
+
+![2.13](/Waveshare_2_13.jpg)
+
+1.54" 200x200
+
+![1.54](/Waveshare_1_54.jpg)
+
+最新 Waveshare HAT 需要较新的 GxEPD2，初始化为：
+
+```cpp
+display.init(115200, true, 2, false);
+```
