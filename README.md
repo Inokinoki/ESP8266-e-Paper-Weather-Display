@@ -63,7 +63,7 @@ An ESP8266 or ESP32 plus an e-paper panel that reads OpenWeatherMap and displays
 
 ## ESP8266 注意 / ESP8266 notes
 
-- **内存**：`common.h` 对 ESP8266 使用过滤后的 JSON 和 12KB 文档，避免 35KB 缓冲分配失败。
+- **内存**：`common.h` 对 ESP8266 使用过滤后的 JSON 和 12KB 文档。4.2" 全屏缓冲是 15KB，ESP8266 默认改用 **分页绘制**（见下节）。
 - **时间**：ESP8266 没有 `getLocalTime()`。4.2" 示例用 NTP + `localtime_r()`。
 - **电池**：ESP8266 默认不画电池。若 A0 接了分压，在编译时定义 `HAS_BATTERY_MONITOR`。
 - **深度睡眠**：4.2" 示例调用 `ESP.deepSleep()`；GPIO16 需接到 RST 才能自动唤醒。
@@ -71,28 +71,29 @@ An ESP8266 or ESP32 plus an e-paper panel that reads OpenWeatherMap and displays
 
 ---
 
-## 分区域更新 / Partial refresh (4.2")
+## 分页更新（小缓冲）/ Paged updates when RAM is tight
 
-`Waveshare_4_2` 默认用 GxEPD2 `displayWindow()` 按区域刷新，避免每次整屏闪白：
+4.2" 单色全屏位图是 `400×300/8 = 15000` 字节。ESP8266 在 WiFi + JSON 之后往往放不下整帧，因此 `Waveshare_4_2` 使用 GxEPD2 的 `firstPage()` / `nextPage()`：**只保留一条水平带的缓冲，整幅画面分多遍重绘**，库会裁剪到当前页。
 
-| 区域 | 范围 | 内容 |
-| --- | --- | --- |
-| 顶栏 | 400×16 | 时间、日期、城市、电量 |
-| 左侧 | 232×172 | 风向、图标、温度、描述 |
-| 右侧 | 168×172 | 3 小时预报、降水、月相 |
-| 底部 | 400×112 | 气压 / 温度 / 降水曲线 |
+| MCU | 默认页高 | 缓冲 | 遍数 |
+| --- | --- | --- | --- |
+| ESP8266 | 75px (`HEIGHT/4`) | 3750 B | 4 |
+| ESP32 | 300px（整帧） | 15000 B | 1 |
 
-每 `FULL_REFRESH_EVERY` 次天气更新（默认 8 次，约 4 小时）仍会整屏全刷，用来清残影。深度睡眠时请保持面板 3.3V，否则局部刷新会花屏。
-
-在 `Waveshare_4_2.ino` 里可改：
+仍不够就在构造 `display` 之前把页高改小（须能整除 300）：
 
 ```cpp
-#define USE_PARTIAL_UPDATE 1     // 0 = 始终全屏刷新
-#define FULL_REFRESH_EVERY 8
-#define CLOCK_PARTIAL_MINUTES 0  // 改成 1 则每分钟只刷新顶栏时间（更费电）
+#define EPD_PAGE_HEIGHT 50   // 2500 字节，6 遍
+// #define EPD_PAGE_HEIGHT 20  // 1000 字节，15 遍
 ```
 
-部分 4.2" 新面板局部刷新较差，若出现残影或花屏，把 `USE_PARTIAL_UPDATE` 设为 `0`。
+`USE_PARTIAL_UPDATE` 只影响波形（快刷 LUT vs 全刷清残影），和分页缓冲不是一回事。深度睡眠时请保持面板 3.3V。
+
+```cpp
+#define USE_PARTIAL_UPDATE 1
+#define FULL_REFRESH_EVERY 8
+#define CLOCK_PARTIAL_MINUTES 0  // 1 = 两次天气之间只分页刷新顶栏时间
+```
 
 ---
 

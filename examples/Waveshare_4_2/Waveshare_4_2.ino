@@ -74,7 +74,20 @@ static const uint8_t EPD_MOSI = 23; // to EPD DIN
 //static const uint8_t EPD_MOSI = 14;
 #endif
 
-GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
+// Full 4.2" bitmap is 400x300/8 = 15000 bytes. ESP8266 cannot keep that plus WiFi/JSON,
+// so GxEPD2 redraws the scene in horizontal bands (firstPage/nextPage).
+// Smaller EPD_PAGE_HEIGHT → less RAM, more passes. Prefer a divisor of 300:
+// 300, 150, 100, 75, 60, 50, 30, 25, 20, 15.
+#ifdef ESP8266
+#ifndef EPD_PAGE_HEIGHT
+#define EPD_PAGE_HEIGHT (GxEPD2_420::HEIGHT / 4) // 75px → 3750-byte buffer, 4 passes
+#endif
+#else
+#ifndef EPD_PAGE_HEIGHT
+#define EPD_PAGE_HEIGHT (GxEPD2_420::HEIGHT)     // ESP32 can hold the full frame
+#endif
+#endif
+GxEPD2_BW<GxEPD2_420, EPD_PAGE_HEIGHT> display(GxEPD2_420(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
 
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;  // Select u8g2 font from here: https://github.com/olikraus/u8g2/wiki/fntlistall
 
@@ -87,7 +100,7 @@ U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;  // Select u8g2 font from here: https://github.
 // u8g2_font_helvB24_tf
 
 //################  VERSION  ##########################
-String version = "12.7";     // Version of this program
+String version = "12.8";     // Version of this program
 //################ VARIABLES ###########################
 
 boolean LargeIcon = true, SmallIcon = false;
@@ -121,8 +134,7 @@ long SleepDuration = 30; // Sleep time in minutes, aligned to the nearest minute
 int  WakeupTime    = 7;  // Don't wakeup until after 07:00 to save battery power
 int  SleepTime     = 23; // Sleep after (23+1) 00:00 to save battery power
 
-// Partial / regional e-paper refresh (GxEPD2 displayWindow).
-// Keep 3.3V to the panel during deep sleep. Periodic full refresh clears ghosting.
+// Fast LUT vs full flash. Paged drawing (small RAM) is independent of this.
 #ifndef USE_PARTIAL_UPDATE
 #define USE_PARTIAL_UPDATE 1
 #endif
@@ -132,12 +144,6 @@ int  SleepTime     = 23; // Sleep after (23+1) 00:00 to save battery power
 #ifndef CLOCK_PARTIAL_MINUTES
 #define CLOCK_PARTIAL_MINUTES 0       // 0 = off; 1 = refresh only the time header every minute
 #endif
-
-// 4.2" landscape regions. x/w are multiples of 8 (controller addressing).
-static const uint16_t REGION_HEADER_X = 0,   REGION_HEADER_Y = 0,   REGION_HEADER_W = 400, REGION_HEADER_H = 16;
-static const uint16_t REGION_MAIN_X   = 0,   REGION_MAIN_Y   = 16,  REGION_MAIN_W   = 232, REGION_MAIN_H   = 172;
-static const uint16_t REGION_SIDE_X   = 232, REGION_SIDE_Y   = 16,  REGION_SIDE_W   = 168, REGION_SIDE_H   = 172;
-static const uint16_t REGION_GRAPH_X  = 0,   REGION_GRAPH_Y  = 188, REGION_GRAPH_W  = 400, REGION_GRAPH_H  = 112;
 
 PlatformRtcState Rtc;
 bool DisplayReady = false;
@@ -186,7 +192,6 @@ void setup() {
       }
       if (RxWeather && RxForecast) {
         StopWiFi();
-        DisplayWeather();
         CommitWeatherToDisplay(fullRefresh);
         Rtc.weatherCount++;
         Rtc.lastWeatherUnix = (uint32_t)time(NULL);
@@ -260,35 +265,30 @@ bool ApplyRtcClock() {
   return UpdateLocalTime();
 }
 //#########################################################################################
-void RefreshRegion(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
-  Serial.println("Partial " + String(x) + "," + String(y) + " " + String(w) + "x" + String(h));
-  display.displayWindow(x, y, w, h);
-}
-//#########################################################################################
 void ShowClockPartial() {
-  display.fillScreen(GxEPD_WHITE);
-  DrawHeadingSection();
-  RefreshRegion(REGION_HEADER_X, REGION_HEADER_Y, REGION_HEADER_W, REGION_HEADER_H);
+  display.setPartialWindow(0, 0, display.width(), 16);
+  display.firstPage();
+  do {
+    DrawHeadingSection();
+  } while (display.nextPage());
   DisplayReady = true;
 }
 //#########################################################################################
 void CommitWeatherToDisplay(bool fullRefresh) {
-#if USE_PARTIAL_UPDATE
+  const uint16_t page_h = EPD_PAGE_HEIGHT;
+  const uint16_t buf_bytes = (GxEPD2_420::WIDTH / 8) * page_h;
+  Serial.println("Paged update: page=" + String(page_h) + "px buffer=" + String(buf_bytes) +
+                 "B passes=" + String((GxEPD2_420::HEIGHT + page_h - 1) / page_h) +
+                 (fullRefresh ? " full" : " partial LUT"));
   if (fullRefresh) {
     display.setFullWindow();
-    display.display(false);
-    Serial.println("Full screen refresh");
   } else {
-    RefreshRegion(REGION_HEADER_X, REGION_HEADER_Y, REGION_HEADER_W, REGION_HEADER_H);
-    RefreshRegion(REGION_MAIN_X, REGION_MAIN_Y, REGION_MAIN_W, REGION_MAIN_H);
-    RefreshRegion(REGION_SIDE_X, REGION_SIDE_Y, REGION_SIDE_W, REGION_SIDE_H);
-    RefreshRegion(REGION_GRAPH_X, REGION_GRAPH_Y, REGION_GRAPH_W, REGION_GRAPH_H);
+    display.setPartialWindow(0, 0, display.width(), display.height());
   }
-#else
-  (void)fullRefresh;
-  display.setFullWindow();
-  display.display(false);
-#endif
+  display.firstPage();
+  do {
+    DisplayWeather(); // redrawn per band; GxEPD2 clips to the current page
+  } while (display.nextPage());
   DisplayReady = true;
 }
 //#########################################################################################
@@ -1079,7 +1079,9 @@ void InitialiseDisplay(bool initialFull) {
   3. Smaller filtered JSON buffer for ESP8266 RAM
 
   Version 12.7
-  1. Regional partial refresh (header / main / forecast / graphs)
-  2. Full refresh every FULL_REFRESH_EVERY weather updates
-  3. Optional CLOCK_PARTIAL_MINUTES header-only updates
+  1. RTC cadence and optional header-only clock updates
+
+  Version 12.8
+  1. Paged e-paper updates (small RAM bands via firstPage/nextPage)
+  2. ESP8266 default page height HEIGHT/4 (3750 bytes vs 15000)
 */
