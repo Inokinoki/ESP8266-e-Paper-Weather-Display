@@ -19,7 +19,7 @@
 */
 #include "owm_credentials.h"  // See 'owm_credentials' tab and enter your OWM API key and set the Wifi SSID and PASSWORD
 #include <ArduinoJson.h>       // https://github.com/bblanchon/ArduinoJson
-#include <ESP8266WiFi.h>       // Built-in
+#include "platform.h"          // ESP8266 / ESP32 WiFi + HTTPClient + sleep helpers
 #include "time.h"              // Built-in
 #include <SPI.h>               // Built-in
 #define  ENABLE_GxEPD2_display 0
@@ -35,12 +35,26 @@
 //#include "lang_it.h"                // Localisation (Italian)
 //#include "lang_nl.h"                // Localisation (Dutch)
 //#include "lang_pl.h"                // Localisation (Polish)
+//#include "lang_zh.h"                // Localisation (Simplified Chinese; needs a CJK u8g2 font)
 
 #define SCREEN_WIDTH  400.0    // Set for landscape mode, don't remove the decimal place!
 #define SCREEN_HEIGHT 300.0
 
 enum alignment {LEFT, RIGHT, CENTER};
 
+#ifdef ESP8266
+// Wemos D1 mini / NodeMCU (GxEPD2 recommended). GPIO 17/18/19/23 do not exist on ESP8266.
+// BUSY -> D2, RST -> D4, DC -> D3, CS -> D8, CLK -> D5, DIN -> D7, GND -> GND, 3.3V -> 3.3V
+static const uint8_t EPD_BUSY = 4;   // D2
+static const uint8_t EPD_CS   = 15;  // D8
+static const uint8_t EPD_RST  = 2;   // D4
+static const uint8_t EPD_DC   = 0;   // D3
+static const uint8_t EPD_SCK  = 14;  // D5
+static const uint8_t EPD_MISO = 12;  // D6 unused
+static const uint8_t EPD_MOSI = 13;  // D7
+// Waveshare e-Paper ESP8266 Driver Board alternative:
+// BUSY=16, RST=5, DC=4, CS=15, CLK=14, DIN=13
+#else
 // Connections for e.g. LOLIN D32
 static const uint8_t EPD_BUSY = 4;  // to EPD BUSY
 static const uint8_t EPD_CS   = 5;  // to EPD CS
@@ -53,11 +67,12 @@ static const uint8_t EPD_MOSI = 23; // to EPD DIN
 // Connections for e.g. Waveshare ESP32 e-Paper Driver Board
 //static const uint8_t EPD_BUSY = 25;
 //static const uint8_t EPD_CS   = 15;
-//static const uint8_t EPD_RST  = 26; 
-//static const uint8_t EPD_DC   = 27; 
+//static const uint8_t EPD_RST  = 26;
+//static const uint8_t EPD_DC   = 27;
 //static const uint8_t EPD_SCK  = 13;
-//static const uint8_t EPD_MISO = 12; // Master-In Slave-Out not used, as no data from display
+//static const uint8_t EPD_MISO = 12;
 //static const uint8_t EPD_MOSI = 14;
+#endif
 
 GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
 
@@ -72,7 +87,7 @@ U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;  // Select u8g2 font from here: https://github.
 // u8g2_font_helvB24_tf
 
 //################  VERSION  ##########################
-String version = "12.5";     // Version of this program
+String version = "12.6";     // Version of this program
 //################ VARIABLES ###########################
 
 boolean LargeIcon = true, SmallIcon = false;
@@ -105,6 +120,11 @@ float snow_readings[max_readings]        = {0};
 long SleepDuration = 30; // Sleep time in minutes, aligned to the nearest minute boundary, so if 30 will always update at 00 or 30 past the hour
 int  WakeupTime    = 7;  // Don't wakeup until after 07:00 to save battery power
 int  SleepTime     = 23; // Sleep after (23+1) 00:00 to save battery power
+
+// Lolin D32 and similar ESP32 boards have a battery ADC. ESP8266 does not unless you wire A0.
+#if !defined(HAS_BATTERY_MONITOR) && !defined(ESP8266)
+#define HAS_BATTERY_MONITOR 1
+#endif
 
 //#########################################################################################
 void setup() {
@@ -144,7 +164,11 @@ void BeginSleep() {
   Serial.println("Entering " + String(SleepTimer) + "-secs of sleep time");
   Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
   Serial.println("Starting deep-sleep period...");
-  ESP.deepSleep((SleepTimer+20) * 1000000LL); // Added +20 seconnds to cover ESP8266 RTC timer source inaccuracies      // Sleep for e.g. 30 minutes
+#ifdef ESP8266
+  // ESP8266 auto-wake requires GPIO16 wired to RST.
+#endif
+  if (SleepTimer < 15) SleepTimer = 15;
+  PlatformDeepSleepSeconds(SleepTimer + 20); // extra seconds cover RTC timer inaccuracy
 }
 //#########################################################################################
 void DisplayWeather() {                 // 4.2" e-paper display is 400x300 resolution
@@ -422,7 +446,9 @@ uint8_t StartWiFi() {
   IPAddress dns(8, 8, 8, 8); // Google DNS
   WiFi.disconnect();
   WiFi.mode(WIFI_STA); // switch off AP
+#ifdef ESP8266
   WiFi.setAutoConnect(true);
+#endif
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, password);
   unsigned long start = millis();
@@ -463,12 +489,10 @@ boolean SetupTime() {
 boolean UpdateLocalTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
-  /*
-  while (!getLocalTime(&timeinfo, 10000)) { // Wait for 5-sec for time to synchronise
+  if (!PlatformGetLocalTime(&timeinfo, 10000)) {
     Serial.println("Failed to obtain time");
     return false;
   }
-  */
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
   CurrentSec  = timeinfo.tm_sec;
@@ -768,8 +792,17 @@ void Nodata(int x, int y, bool IconSize, String IconName) {
 }
 //#########################################################################################
 void DrawBattery(int x, int y) {
+#ifdef HAS_BATTERY_MONITOR
   uint8_t percentage = 100;
+#ifdef ESP8266
+  // A0 is 10-bit. Add a voltage divider and set BATTERY_ADC_SCALE to match.
+#ifndef BATTERY_ADC_SCALE
+#define BATTERY_ADC_SCALE 4.2
+#endif
+  float voltage = analogRead(A0) / 1023.0 * BATTERY_ADC_SCALE;
+#else
   float voltage = analogRead(35) / 4096.0 * 7.46;
+#endif
   if (voltage > 1 ) { // Only display if there is a valid reading
     Serial.println("Voltage = " + String(voltage));
     percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
@@ -779,8 +812,11 @@ void DrawBattery(int x, int y) {
     display.fillRect(x + 34, y - 10, 2, 5, GxEPD_BLACK);
     display.fillRect(x + 17, y - 10, 15 * percentage / 100.0, 6, GxEPD_BLACK);
     drawString(x + 65, y - 11, String(percentage) + "%", RIGHT);
-    //drawString(x + 13, y + 5,  String(voltage, 2) + "v", CENTER);
   }
+#else
+  (void)x;
+  (void)y;
+#endif
 }
 //#########################################################################################
 /* (C) D L BIRD
@@ -894,8 +930,11 @@ void InitialiseDisplay() {
   display.init(115200, true, 2, false);
   // display.init(); for older Waveshare HAT's
   SPI.end();
-  // TODO: fixme or clarify wherer are the SPI PINs
-  SPI.begin();
+#ifdef ESP8266
+  SPI.begin(); // hardware SPI: SCK=GPIO14, MOSI=GPIO13
+#else
+  SPI.begin(EPD_SCK, EPD_MISO, EPD_MOSI, EPD_CS);
+#endif
   u8g2Fonts.begin(display); // connect u8g2 procedures to Adafruit GFX
   u8g2Fonts.setFontMode(1);                  // use u8g2 transparent mode (this is default)
   u8g2Fonts.setFontDirection(0);             // left to right (this is default)
@@ -923,6 +962,8 @@ void InitialiseDisplay() {
   Version 12.4
   1. Improved graph drawing function for negative numbers Line 808
   
-  Version 12.5
-  1. Modified for GxEPD2 changes
+  Version 12.6
+  1. Dual ESP8266 / ESP32 support (pins, SPI, sleep, NTP)
+  2. OpenWeatherMap queries by latitude/longitude
+  3. Smaller filtered JSON buffer for ESP8266 RAM
 */
