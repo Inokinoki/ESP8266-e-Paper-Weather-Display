@@ -87,7 +87,7 @@ U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;  // Select u8g2 font from here: https://github.
 // u8g2_font_helvB24_tf
 
 //################  VERSION  ##########################
-String version = "12.6";     // Version of this program
+String version = "12.7";     // Version of this program
 //################ VARIABLES ###########################
 
 boolean LargeIcon = true, SmallIcon = false;
@@ -121,6 +121,31 @@ long SleepDuration = 30; // Sleep time in minutes, aligned to the nearest minute
 int  WakeupTime    = 7;  // Don't wakeup until after 07:00 to save battery power
 int  SleepTime     = 23; // Sleep after (23+1) 00:00 to save battery power
 
+// Partial / regional e-paper refresh (GxEPD2 displayWindow).
+// Keep 3.3V to the panel during deep sleep. Periodic full refresh clears ghosting.
+#ifndef USE_PARTIAL_UPDATE
+#define USE_PARTIAL_UPDATE 1
+#endif
+#ifndef FULL_REFRESH_EVERY
+#define FULL_REFRESH_EVERY 8          // full flash every N weather updates (~4h at 30 min)
+#endif
+#ifndef CLOCK_PARTIAL_MINUTES
+#define CLOCK_PARTIAL_MINUTES 0       // 0 = off; 1 = refresh only the time header every minute
+#endif
+
+// 4.2" landscape regions. x/w are multiples of 8 (controller addressing).
+static const uint16_t REGION_HEADER_X = 0,   REGION_HEADER_Y = 0,   REGION_HEADER_W = 400, REGION_HEADER_H = 16;
+static const uint16_t REGION_MAIN_X   = 0,   REGION_MAIN_Y   = 16,  REGION_MAIN_W   = 232, REGION_MAIN_H   = 172;
+static const uint16_t REGION_SIDE_X   = 232, REGION_SIDE_Y   = 16,  REGION_SIDE_W   = 168, REGION_SIDE_H   = 172;
+static const uint16_t REGION_GRAPH_X  = 0,   REGION_GRAPH_Y  = 188, REGION_GRAPH_W  = 400, REGION_GRAPH_H  = 112;
+
+PlatformRtcState Rtc;
+bool DisplayReady = false;
+
+bool InWakeHours() {
+  return CurrentHour >= WakeupTime && CurrentHour <= SleepTime;
+}
+
 // Lolin D32 and similar ESP32 boards have a battery ADC. ESP8266 does not unless you wire A0.
 #if !defined(HAS_BATTERY_MONITOR) && !defined(ESP8266)
 #define HAS_BATTERY_MONITOR 1
@@ -130,21 +155,41 @@ int  SleepTime     = 23; // Sleep after (23+1) 00:00 to save battery power
 void setup() {
   StartTime = millis();
   Serial.begin(115200);
-  if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-    if (CurrentHour >= WakeupTime && CurrentHour <= SleepTime ) {
-      InitialiseDisplay(); // Give screen time to initialise by getting weather data!
+  bool rtcOk = PlatformRtcLoad(&Rtc);
+  Rtc.bootCount++;
+  Serial.println("Boot " + String(Rtc.bootCount) + " weather#" + String(Rtc.weatherCount) + (rtcOk ? " (rtc)" : " (cold)"));
+
+  bool clockOnly = false;
+  if (CLOCK_PARTIAL_MINUTES > 0 && rtcOk && Rtc.lastWeatherUnix > 0 && ApplyRtcClock()) {
+    time_t now = time(NULL);
+    if (now > 0 && (uint32_t)now < Rtc.lastWeatherUnix + (uint32_t)SleepDuration * 60) {
+      clockOnly = true;
+    }
+  }
+
+  if (clockOnly) {
+    if (InWakeHours()) {
+      InitialiseDisplay(false);
+      ShowClockPartial();
+    }
+  } else if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
+    if (InWakeHours()) {
+      bool fullRefresh = !USE_PARTIAL_UPDATE || !rtcOk || (Rtc.weatherCount % FULL_REFRESH_EVERY == 0);
+      InitialiseDisplay(fullRefresh);
       byte Attempts = 1;
       bool RxWeather = false, RxForecast = false;
-      WiFiClient client;   // wifi client object
-      while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
+      WiFiClient client;
+      while ((RxWeather == false || RxForecast == false) && Attempts <= 2) {
         if (RxWeather  == false) RxWeather  = obtain_wx_data(client, "weather");
         if (RxForecast == false) RxForecast = obtain_wx_data(client, "forecast");
         Attempts++;
       }
-      if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
-        StopWiFi(); // Reduces power consumption
+      if (RxWeather && RxForecast) {
+        StopWiFi();
         DisplayWeather();
-        display.display(false); // Full screen update mode
+        CommitWeatherToDisplay(fullRefresh);
+        Rtc.weatherCount++;
+        Rtc.lastWeatherUnix = (uint32_t)time(NULL);
       }
     }
   }
@@ -155,8 +200,29 @@ void loop() { // this will never run!
 }
 //#########################################################################################
 void BeginSleep() {
-  display.powerOff();
-  long SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec)); //Some ESP32 are too fast to maintain accurate time
+  if (DisplayReady) {
+#if USE_PARTIAL_UPDATE
+    display.hibernate(); // keep panel image; RST can wake the controller
+#else
+    display.powerOff();
+#endif
+  }
+  long SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec));
+  if (Rtc.lastWeatherUnix > 0 && time(NULL) > 1600000000L) {
+    if (!InWakeHours()) {
+      int nowSecs = CurrentHour * 3600 + CurrentMin * 60 + CurrentSec;
+      int wakeSecs = WakeupTime * 3600;
+      SleepTimer = wakeSecs - nowSecs;
+      if (SleepTimer <= 60) SleepTimer += 24 * 3600;
+    } else if (CLOCK_PARTIAL_MINUTES > 0) {
+      long clockSleep = CLOCK_PARTIAL_MINUTES * 60 - CurrentSec;
+      if (clockSleep < 15) clockSleep += CLOCK_PARTIAL_MINUTES * 60;
+      long weatherDue = (long)Rtc.lastWeatherUnix + SleepDuration * 60 - (long)time(NULL);
+      if (weatherDue < 15) weatherDue = 15;
+      SleepTimer = clockSleep;
+      if (weatherDue < SleepTimer) SleepTimer = weatherDue;
+    }
+  }
 #ifdef BUILTIN_LED
   pinMode(BUILTIN_LED, INPUT); // If it's On, turn it off and some boards use GPIO-5 for SPI-SS, which remains low after screen use
   digitalWrite(BUILTIN_LED, HIGH);
@@ -168,6 +234,10 @@ void BeginSleep() {
   // ESP8266 auto-wake requires GPIO16 wired to RST.
 #endif
   if (SleepTimer < 15) SleepTimer = 15;
+  Rtc.magic = kPlatformRtcMagic;
+  Rtc.unixAtSleep = (uint32_t)time(NULL);
+  Rtc.lastSleepSecs = (uint32_t)(SleepTimer + 20);
+  PlatformRtcWrite(&Rtc);
   PlatformDeepSleepSeconds(SleepTimer + 20); // extra seconds cover RTC timer inaccuracy
 }
 //#########################################################################################
@@ -179,6 +249,47 @@ void DisplayWeather() {                 // 4.2" e-paper display is 400x300 resol
   if (WxConditions[0].Visibility > 0) Visibility(335, 100, String(WxConditions[0].Visibility) + "M");
   if (WxConditions[0].Cloudcover > 0) CloudCover(350, 125, WxConditions[0].Cloudcover);
   DrawAstronomySection(233, 74);        // Astronomy section Sun rise/set, Moon phase and Moon icon
+}
+//#########################################################################################
+bool ApplyRtcClock() {
+  if (Rtc.unixAtSleep < 1600000000UL) return false;
+  time_t now = (time_t)Rtc.unixAtSleep + (time_t)Rtc.lastSleepSecs;
+  if (!PlatformSetUnixTime(now)) return false;
+  setenv("TZ", Timezone, 1);
+  tzset();
+  return UpdateLocalTime();
+}
+//#########################################################################################
+void RefreshRegion(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  Serial.println("Partial " + String(x) + "," + String(y) + " " + String(w) + "x" + String(h));
+  display.displayWindow(x, y, w, h);
+}
+//#########################################################################################
+void ShowClockPartial() {
+  display.fillScreen(GxEPD_WHITE);
+  DrawHeadingSection();
+  RefreshRegion(REGION_HEADER_X, REGION_HEADER_Y, REGION_HEADER_W, REGION_HEADER_H);
+  DisplayReady = true;
+}
+//#########################################################################################
+void CommitWeatherToDisplay(bool fullRefresh) {
+#if USE_PARTIAL_UPDATE
+  if (fullRefresh) {
+    display.setFullWindow();
+    display.display(false);
+    Serial.println("Full screen refresh");
+  } else {
+    RefreshRegion(REGION_HEADER_X, REGION_HEADER_Y, REGION_HEADER_W, REGION_HEADER_H);
+    RefreshRegion(REGION_MAIN_X, REGION_MAIN_Y, REGION_MAIN_W, REGION_MAIN_H);
+    RefreshRegion(REGION_SIDE_X, REGION_SIDE_Y, REGION_SIDE_W, REGION_SIDE_H);
+    RefreshRegion(REGION_GRAPH_X, REGION_GRAPH_Y, REGION_GRAPH_W, REGION_GRAPH_H);
+  }
+#else
+  (void)fullRefresh;
+  display.setFullWindow();
+  display.display(false);
+#endif
+  DisplayReady = true;
 }
 //#########################################################################################
 void DrawHeadingSection() {
@@ -926,8 +1037,8 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
   }
 }
 //#########################################################################################
-void InitialiseDisplay() {
-  display.init(115200, true, 2, false);
+void InitialiseDisplay(bool initialFull) {
+  display.init(115200, initialFull, 2, false);
   // display.init(); for older Waveshare HAT's
   SPI.end();
 #ifdef ESP8266
@@ -966,4 +1077,9 @@ void InitialiseDisplay() {
   1. Dual ESP8266 / ESP32 support (pins, SPI, sleep, NTP)
   2. OpenWeatherMap queries by latitude/longitude
   3. Smaller filtered JSON buffer for ESP8266 RAM
+
+  Version 12.7
+  1. Regional partial refresh (header / main / forecast / graphs)
+  2. Full refresh every FULL_REFRESH_EVERY weather updates
+  3. Optional CLOCK_PARTIAL_MINUTES header-only updates
 */

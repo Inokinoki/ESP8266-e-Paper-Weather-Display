@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <time.h>
+#include <sys/time.h>
+#include <string.h>
 
 // ESP8266 and ESP32 expose the same WiFi / HTTPClient class names, but the
 // headers live in different libraries.
@@ -42,6 +44,56 @@ inline void PlatformDeepSleepSeconds(uint64_t seconds) {
   esp_sleep_enable_timer_wakeup(seconds * 1000000ULL);
   esp_deep_sleep_start();
 #endif
+}
+
+inline bool PlatformSetUnixTime(time_t unix_time) {
+  struct timeval tv;
+  tv.tv_sec = unix_time;
+  tv.tv_usec = 0;
+  return settimeofday(&tv, NULL) == 0;
+}
+
+// Survives deep sleep (not a power-on reset). Used for partial refresh cadence
+// and reconstructing the clock without NTP.
+struct PlatformRtcState {
+  uint32_t magic;
+  uint32_t bootCount;
+  uint32_t weatherCount;
+  uint32_t unixAtSleep;
+  uint32_t lastWeatherUnix;
+  uint32_t lastSleepSecs;
+};
+
+static const uint32_t kPlatformRtcMagic = 0xE42A0002;
+
+#ifdef ESP32
+static RTC_DATA_ATTR PlatformRtcState g_platformRtcState;
+#endif
+
+inline bool PlatformRtcRead(PlatformRtcState* state) {
+#ifdef ESP8266
+  return ESP.rtcUserMemoryRead(0, reinterpret_cast<uint32_t*>(state), sizeof(PlatformRtcState));
+#else
+  *state = g_platformRtcState;
+  return true;
+#endif
+}
+
+inline void PlatformRtcWrite(const PlatformRtcState* state) {
+#ifdef ESP8266
+  ESP.rtcUserMemoryWrite(0, const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(state)), sizeof(PlatformRtcState));
+#else
+  g_platformRtcState = *state;
+#endif
+}
+
+inline bool PlatformRtcLoad(PlatformRtcState* state) {
+  if (!PlatformRtcRead(state) || state->magic != kPlatformRtcMagic) {
+    memset(state, 0, sizeof(*state));
+    state->magic = kPlatformRtcMagic;
+    return false;
+  }
+  return true;
 }
 
 #endif /* ifndef PLATFORM_COMPAT_H_ */

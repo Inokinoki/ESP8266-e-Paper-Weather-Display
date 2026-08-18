@@ -71,6 +71,31 @@ An ESP8266 or ESP32 plus an e-paper panel that reads OpenWeatherMap and displays
 
 ---
 
+## 分区域更新 / Partial refresh (4.2")
+
+`Waveshare_4_2` 默认用 GxEPD2 `displayWindow()` 按区域刷新，避免每次整屏闪白：
+
+| 区域 | 范围 | 内容 |
+| --- | --- | --- |
+| 顶栏 | 400×16 | 时间、日期、城市、电量 |
+| 左侧 | 232×172 | 风向、图标、温度、描述 |
+| 右侧 | 168×172 | 3 小时预报、降水、月相 |
+| 底部 | 400×112 | 气压 / 温度 / 降水曲线 |
+
+每 `FULL_REFRESH_EVERY` 次天气更新（默认 8 次，约 4 小时）仍会整屏全刷，用来清残影。深度睡眠时请保持面板 3.3V，否则局部刷新会花屏。
+
+在 `Waveshare_4_2.ino` 里可改：
+
+```cpp
+#define USE_PARTIAL_UPDATE 1     // 0 = 始终全屏刷新
+#define FULL_REFRESH_EVERY 8
+#define CLOCK_PARTIAL_MINUTES 0  // 改成 1 则每分钟只刷新顶栏时间（更费电）
+```
+
+部分 4.2" 新面板局部刷新较差，若出现残影或花屏，把 `USE_PARTIAL_UPDATE` 设为 `0`。
+
+---
+
 ## 语言 / Languages
 
 在 sketch 里改 `#include "lang.h"` 为其它文件：`lang_cz.h`、`lang_es.h`、`lang_fr.h`、`lang_gr.h`、`lang_it.h`、`lang_nl.h`、`lang_no.h`、`lang_pl.h`、`lang_pt.h`、**`lang_zh.h`（简体中文）**。
